@@ -296,7 +296,15 @@ _MTLCopyAllDevices(void *obj) {
     params->ret = (wmtr_call(RM_OP_COPY_ALL_DEVICES, 0, 0, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
     return STATUS_SUCCESS;
   }
+#if TARGET_OS_IOS
+  /* MTLCopyAllDevices is API_UNAVAILABLE(ios). The PE side (Metal.hpp
+   * CopyAllDevices) expects an NSArray handle, so wrap the one device iOS
+   * has the same way. */
+  id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+  params->ret = (obj_handle_t)(dev ? [NSArray arrayWithObject:dev] : nil);
+#else
   params->ret = (obj_handle_t)MTLCopyAllDevices();
+#endif
   return STATUS_SUCCESS;
 }
 
@@ -6040,7 +6048,12 @@ static NTSTATUS _madeira_ctl_wow64(void *args) {
 
 /* ml880: residency sets (slots 129-132). Local bodies need iOS 18 / macOS 15;
  * on anything older the calls are no-ops and the runtime falls back to its
- * per-draw useResource lists. */
+ * per-draw useResource lists.  The MTLResidencySet* types only exist in SDKs
+ * that ship them, so the local bodies are additionally fenced with
+ * __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000 (Xcode 16 = macOS 15 SDK = iOS 18
+ * SDK); @available alone cannot compile out types absent from the SDK, which
+ * is what the macos-14 CI runner's iOS 17 SDK hits.  Same guard the
+ * binary-archive mesh bodies above already use. */
 static NTSTATUS
 _MTLDevice_newResidencySet(void *obj) {
   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
@@ -6054,12 +6067,14 @@ _MTLDevice_newResidencySet(void *obj) {
     return STATUS_SUCCESS;
   }
   params->ret = 0;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
   if (@available(iOS 18.0, macOS 15.0, *)) {
     MTLResidencySetDescriptor *d = [[MTLResidencySetDescriptor alloc] init];
     d.initialCapacity = (NSUInteger)params->arg;
     NSError *e = nil;
     params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newResidencySetWithDescriptor:d error:&e];
   }
+#endif
   return STATUS_SUCCESS;
 }
 
@@ -6071,9 +6086,12 @@ _MTLResidencySet_addAllocation(void *obj) {
     wmtr_call(RM_OP_RESIDENCY_ADD, &a, sizeof a, 0, 0, 0);
     return STATUS_SUCCESS;
   }
-  if (@available(iOS 18.0, macOS 15.0, *))
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+  if (@available(iOS 18.0, macOS 15.0, *)) {
     wmt_stale_check(params->arg, "residency add");   /* ml1156 */
     [(id<MTLResidencySet>)params->handle addAllocation:(id<MTLAllocation>)params->arg];
+  }
+#endif
   return STATUS_SUCCESS;
 }
 
@@ -6084,8 +6102,10 @@ static NTSTATUS
 _MTLResidencySet_removeAllocation(void *obj) {
   struct unixcall_generic_obj_obj_noret *params = obj;
   if (wmtr_enabled()) return STATUS_SUCCESS;   /* the remote host owns its own set */
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
   if (@available(iOS 18.0, macOS 15.0, *))
     [(id<MTLResidencySet>)params->handle removeAllocation:(id<MTLAllocation>)params->arg];
+#endif
   return STATUS_SUCCESS;
 }
 
@@ -6179,10 +6199,12 @@ _MTLResidencySet_commit(void *obj) {
     wmtr_call(RM_OP_RESIDENCY_COMMIT, &a, sizeof a, 0, 0, 0);
     return STATUS_SUCCESS;
   }
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
   if (@available(iOS 18.0, macOS 15.0, *)) {
     [(id<MTLResidencySet>)params->handle commit];
     [(id<MTLResidencySet>)params->handle requestResidency];
   }
+#endif
   return STATUS_SUCCESS;
 }
 
@@ -6194,8 +6216,10 @@ _MTLCommandQueue_addResidencySet(void *obj) {
     wmtr_call(RM_OP_QUEUE_ADD_RESIDENCY, &a, sizeof a, 0, 0, 0);
     return STATUS_SUCCESS;
   }
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
   if (@available(iOS 18.0, macOS 15.0, *))
     [(id<MTLCommandQueue>)params->handle addResidencySet:(id<MTLResidencySet>)params->arg];
+#endif
   return STATUS_SUCCESS;
 }
 
